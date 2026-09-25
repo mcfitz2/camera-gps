@@ -25,7 +25,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -88,10 +87,6 @@ class ShutterService : Service() {
                 session(device, fix)
                 return
             } catch (e: GattException) {
-                Log.w(TAG, "attempt $attempt: ${e.message}")
-                delay(RETRY_DELAY_MS)
-            } catch (e: TimeoutCancellationException) {
-                // A GATT op timed out; the logger may be out of range.
                 Log.w(TAG, "attempt $attempt: ${e.message}")
                 delay(RETRY_DELAY_MS)
             }

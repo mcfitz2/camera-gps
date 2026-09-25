@@ -12,7 +12,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,6 +25,29 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 class GattException(message: String) : Exception(message)
+
+/** [withTimeout], but running out of time is a failed operation rather than a cancellation. */
+private suspend fun <T> within(ms: Long, what: String, block: suspend CoroutineScope.() -> T): T = try {
+    withTimeout(ms, block)
+} catch (e: TimeoutCancellationException) {
+    throw GattException("$what: timed out")
+}
+
+/** The callback that completes a GATT operation. */
+internal enum class OpKind { WRITE, READ, MTU, DESCRIPTOR_WRITE }
+
+/**
+ * The one operation in flight. Only a callback of the same kind, for the same
+ * characteristic, completes it, so a late callback from an operation that
+ * timed out can't complete the next one.
+ */
+internal class InFlight(private val kind: OpKind, private val uuid: UUID?) {
+    val result = CompletableDeferred<Pair<Int, ByteArray>>()
+
+    /** Completes with a callback's status and value if the callback belongs to this operation. */
+    fun offer(kind: OpKind, uuid: UUID?, status: Int, value: ByteArray = ByteArray(0)): Boolean =
+        kind == this.kind && uuid == this.uuid && result.complete(status to value)
+}
 
 /**
  * Coroutine wrapper around [BluetoothGatt]. Android allows one GATT operation
@@ -33,9 +59,7 @@ class GattException(message: String) : Exception(message)
 class Gatt private constructor(private val device: BluetoothDevice) {
     private lateinit var gatt: BluetoothGatt
     private val opLock = Mutex()
-    @Volatile private var pending: CompletableDeferred<Int>? = null
-    /** Value delivered by the last read, valid once [pending] completes. */
-    @Volatile private var readValue = ByteArray(0)
+    @Volatile private var pending: InFlight? = null
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Int>()
     private val listeners = ConcurrentHashMap<UUID, (ByteArray) -> Unit>()
@@ -51,7 +75,7 @@ class Gatt private constructor(private val device: BluetoothDevice) {
                     val reason = GattException("disconnected (status $status)")
                     connected.completeExceptionally(reason)
                     servicesDiscovered.completeExceptionally(reason)
-                    pending?.completeExceptionally(reason)
+                    pending?.result?.completeExceptionally(reason)
                     disconnected.complete(status)
                 }
             }
@@ -62,20 +86,19 @@ class Gatt private constructor(private val device: BluetoothDevice) {
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
-            pending?.complete(status)
+            if (pending?.offer(OpKind.WRITE, c.uuid, status) == false) Log.w(TAG, "stray write callback")
         }
 
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            readValue = value
-            pending?.complete(status)
+            if (pending?.offer(OpKind.READ, c.uuid, status, value) == false) Log.w(TAG, "stray read callback")
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            pending?.complete(status)
+            if (pending?.offer(OpKind.MTU, null, status) == false) Log.w(TAG, "stray MTU callback")
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-            pending?.complete(status)
+            if (pending?.offer(OpKind.DESCRIPTOR_WRITE, d.characteristic.uuid, status) == false) Log.w(TAG, "stray descriptor callback")
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -92,22 +115,21 @@ class Gatt private constructor(private val device: BluetoothDevice) {
 
     suspend fun write(service: UUID, characteristic: UUID, value: ByteArray) {
         val c = characteristic(service, characteristic)
-        op("write $characteristic") {
+        op("write $characteristic", OpKind.WRITE, characteristic) {
             gatt.writeCharacteristic(c, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         }
     }
 
     suspend fun read(service: UUID, characteristic: UUID): ByteArray {
         val c = characteristic(service, characteristic)
-        op("read $characteristic") {
+        return op("read $characteristic", OpKind.READ, characteristic) {
             if (gatt.readCharacteristic(c)) BluetoothStatusCodes.SUCCESS else BluetoothStatusCodes.ERROR_UNKNOWN
         }
-        return readValue
     }
 
     /** Ask for a larger ATT MTU, so long values fit one read. */
     suspend fun requestMtu(mtu: Int) {
-        op("request MTU") {
+        op("request MTU", OpKind.MTU, null) {
             if (gatt.requestMtu(mtu)) BluetoothStatusCodes.SUCCESS else BluetoothStatusCodes.ERROR_UNKNOWN
         }
     }
@@ -120,7 +142,7 @@ class Gatt private constructor(private val device: BluetoothDevice) {
             throw GattException("enable indications on $characteristic")
         }
         val cccd = c.getDescriptor(CCCD) ?: throw GattException("no CCCD on $characteristic")
-        op("subscribe $characteristic") {
+        op("subscribe $characteristic", OpKind.DESCRIPTOR_WRITE, characteristic) {
             gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_INDICATION_VALUE)
         }
     }
@@ -136,20 +158,22 @@ class Gatt private constructor(private val device: BluetoothDevice) {
         gatt.getService(service)?.getCharacteristic(characteristic)
             ?: throw GattException("device has no $characteristic")
 
-    private suspend fun op(what: String, start: () -> Int) = opLock.withLock {
-        val done = CompletableDeferred<Int>()
-        pending = done
+    private suspend fun op(what: String, kind: OpKind, uuid: UUID?, start: () -> Int): ByteArray = opLock.withLock {
+        val op = InFlight(kind, uuid)
+        pending = op
         try {
             val started = start()
             if (started != BluetoothStatusCodes.SUCCESS) throw GattException("$what: not started ($started)")
-            val status = withTimeout(OP_TIMEOUT_MS) { done.await() }
+            val (status, value) = within(OP_TIMEOUT_MS, what) { op.result.await() }
             if (status != BluetoothGatt.GATT_SUCCESS) throw GattException("$what: status $status")
+            value
         } finally {
             pending = null
         }
     }
 
     companion object {
+        private const val TAG = "Gatt"
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val OP_TIMEOUT_MS = 5_000L
 
@@ -163,11 +187,11 @@ class Gatt private constructor(private val device: BluetoothDevice) {
             g.gatt = device.connectGatt(context, false, g.callback, BluetoothDevice.TRANSPORT_LE)
                 ?: throw GattException("connectGatt failed")
             try {
-                withTimeout(timeoutMs) { g.connected.await() }
+                within(timeoutMs, "connect") { g.connected.await() }
                 if (bond && device.bondState != BluetoothDevice.BOND_BONDED) {
                     bond(context, device)
                 }
-                val status = withTimeout(OP_TIMEOUT_MS * 2) {
+                val status = within(OP_TIMEOUT_MS * 2, "service discovery") {
                     if (!g.gatt.discoverServices()) throw GattException("discoverServices failed")
                     g.servicesDiscovered.await()
                 }
