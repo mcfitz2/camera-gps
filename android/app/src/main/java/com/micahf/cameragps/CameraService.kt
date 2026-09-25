@@ -28,6 +28,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -45,6 +46,9 @@ class CameraService : Service() {
     private lateinit var locations: LocationManager
     private lateinit var notifier: Notifier
     private val locationListener = LocationListener { fix -> onLocation(fix) }
+    /** Loads the geoid model once; conversions run one at a time on it. */
+    private val altitude by lazy { AltitudeConverter() }
+    private val converting = Dispatchers.IO.limitedParallelism(1)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -157,14 +161,19 @@ class CameraService : Service() {
     /** Publish a fix, adding sea-level altitude (what cameras record) when missing. */
     private fun onLocation(fix: Location) {
         if (fix.hasMslAltitude() || !fix.hasAltitude()) {
-            location.value = fix
+            publish(fix)
             return
         }
-        scope.launch(Dispatchers.IO) {
-            runCatching { AltitudeConverter().addMslAltitudeToLocation(this@CameraService, fix) }
+        scope.launch(converting) {
+            runCatching { altitude.addMslAltitudeToLocation(this@CameraService, fix) }
                 .onFailure { Log.w(TAG, "altitude conversion: ${it.message}") }
-            location.value = fix
+            publish(fix)
         }
+    }
+
+    /** A slow conversion mustn't replace a newer fix with an older one. */
+    private fun publish(fix: Location) {
+        location.update { current -> if (current != null && current.time > fix.time) current else fix }
     }
 
     private fun granted(permission: String) =
