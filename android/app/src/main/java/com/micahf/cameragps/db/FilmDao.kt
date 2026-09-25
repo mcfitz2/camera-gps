@@ -3,6 +3,7 @@ package com.micahf.cameragps.db
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
@@ -22,12 +23,26 @@ abstract class FilmDao {
     @Query("SELECT * FROM frame WHERE rollId = :rollId ORDER BY number")
     abstract fun frames(rollId: Long): Flow<List<Frame>>
 
-    /** Film stocks used before, most recent first, for suggestions. */
+    /** The stock list, most recently loaded first, then alphabetically. */
     @Query(
-        """SELECT stock FROM roll WHERE stock IS NOT NULL AND stock != ''
-           GROUP BY stock ORDER BY MAX(loadedAt) DESC LIMIT 6""",
+        """SELECT stock.* FROM stock LEFT JOIN roll ON roll.stock = stock.name
+           GROUP BY stock.id
+           ORDER BY MAX(roll.loadedAt) IS NULL, MAX(roll.loadedAt) DESC, stock.name""",
     )
-    abstract fun recentStocks(): Flow<List<String>>
+    abstract fun stocks(): Flow<List<Stock>>
+
+    /** Adds [stock] to the list unless one with that name is already there. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    abstract suspend fun addStock(stock: Stock): Long
+
+    @Delete
+    abstract suspend fun deleteStock(stock: Stock)
+
+    /** Puts back any default stocks that were deleted. */
+    @Transaction
+    open suspend fun restoreDefaultStocks() {
+        FilmStocks.defaults.forEach { addStock(it) }
+    }
 
     @Query("UPDATE frame SET place = :place WHERE id IN (:ids)")
     abstract suspend fun setPlace(ids: List<Long>, place: String)

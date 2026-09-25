@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -25,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.CameraRoll
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Sync
@@ -45,7 +47,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -70,6 +71,7 @@ import com.micahf.cameragps.Prefs
 import com.micahf.cameragps.db.FilmDao
 import com.micahf.cameragps.db.Roll
 import com.micahf.cameragps.db.RollSummary
+import com.micahf.cameragps.db.Stock
 import kotlinx.coroutines.launch
 
 /**
@@ -320,7 +322,9 @@ fun RollSheet(
     onSave: (Roll) -> Unit,
 ) {
     val context = LocalContext.current
-    val recent by dao.recentStocks().collectAsStateWithLifecycle(emptyList())
+    val scope = rememberCoroutineScope()
+    val stocks by dao.stocks().collectAsStateWithLifecycle(emptyList())
+    var managing by remember { mutableStateOf(false) }
     var stock by remember { mutableStateOf(initial?.stock ?: "") }
     var iso by remember { mutableStateOf(initial?.iso) }
     var capacity by remember { mutableStateOf(initial?.capacity ?: 36) }
@@ -342,10 +346,27 @@ fun RollSheet(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val suggestions = recent.filter { it != stock }
-            if (suggestions.isNotEmpty()) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(suggestions) { s -> SuggestionChip(onClick = { stock = s }, label = { Text(s) }) }
+            // Typing narrows the list, unless it already names a stock.
+            val typed = stock.trim()
+            val exact = stocks.any { it.name.equals(typed, ignoreCase = true) }
+            val shown = if (typed.isEmpty() || exact) stocks else stocks.filter { it.name.contains(typed, ignoreCase = true) }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(shown, key = { it.id }) { s ->
+                    FilterChip(
+                        selected = s.name.equals(typed, ignoreCase = true),
+                        onClick = {
+                            stock = s.name
+                            if (s.iso != null) iso = s.iso
+                        },
+                        label = { Text(s.name) },
+                    )
+                }
+                item {
+                    AssistChip(
+                        onClick = { managing = true },
+                        label = { Text("Edit list") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, null, Modifier.size(18.dp)) },
+                    )
                 }
             }
 
@@ -379,18 +400,22 @@ fun RollSheet(
                         iso = iso,
                         capacity = capacity,
                     )
+                    // A stock typed in by hand joins the list for next time.
+                    roll.stock?.let { scope.launch { dao.addStock(Stock(name = it, iso = roll.iso)) } }
                     onSave(roll)
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(if (initial == null) "Load film" else "Save") }
         }
     }
+    if (managing) StocksSheet(dao, onDismiss = { managing = false })
 }
 
 /** Chips for common values, then a field for anything else. */
 @Composable
 private fun PresetRow(presets: List<Int>, value: Int?, onChange: (Int?) -> Unit) {
-    var other by remember { mutableStateOf(value?.takeIf { it !in presets }?.toString() ?: "") }
+    // Keyed on value so a value set elsewhere (picking a stock) shows up here.
+    var other by remember(value) { mutableStateOf(value?.takeIf { it !in presets }?.toString() ?: "") }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         items(presets) { p ->
             FilterChip(
