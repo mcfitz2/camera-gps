@@ -109,6 +109,7 @@ class ShutterService : Service() {
                 val value = gatt.read(ShutterProtocol.SERVICE, ShutterProtocol.EVENTS)
                 val receivedAt = System.currentTimeMillis()
                 val events = ShutterProtocol.parseEvents(value)
+                Prefs(this).shutterLastSeen = receivedAt
                 Log.i(TAG, "boot ${events.bootId.toString(16)}: ${events.shots}")
                 if (events.shots.isEmpty()) return
                 store(events, receivedAt, fix.await())
@@ -140,8 +141,14 @@ class ShutterService : Service() {
         }
         val now = System.currentTimeMillis()
         val untitled = "Untitled roll " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(now))
-        val (roll, added) = FilmDb.get(this).film().addShots(shots, untitled, now)
-        if (added.isNotEmpty()) report(roll, added, newRoll = roll.loadedAt == now)
+        val dao = FilmDb.get(this).film()
+        val (roll, added) = dao.addShots(shots, untitled, now)
+        if (added.isEmpty()) return
+        // One fix covers the batch, so one lookup names them all.
+        val place = fix?.let { Places.name(this, it.latitude, it.longitude) }
+        val named = if (place == null) added else added.map { it.copy(place = place) }
+        if (place != null) dao.setPlace(added.map { it.id }, place)
+        report(roll, named, newRoll = roll.loadedAt == now)
     }
 
     private fun report(roll: Roll, added: List<Frame>, newRoll: Boolean) {
@@ -151,9 +158,8 @@ class ShutterService : Service() {
         val place = added.last().let {
             when {
                 it.lat == null -> "no location"
-                it.approximate -> "approximate location"
-                it.accuracyM != null -> "±%.0f m".format(it.accuracyM)
-                else -> null
+                it.approximate -> it.place?.let { p -> "near $p" } ?: "approximate location"
+                else -> it.place ?: it.accuracyM?.let { m -> "±%.0f m".format(m) }
             }
         }
         val text = listOfNotNull(place, if (newRoll) "new roll started, rename it in the app" else null)
@@ -196,7 +202,6 @@ class ShutterService : Service() {
 
     companion object {
         private const val TAG = "ShutterService"
-        /** The logger advertises for 15 s after a shot. */
         private const val CONNECT_TIMEOUT_MS = 5_000L
         private const val CONNECT_ATTEMPTS = 3
         private const val RETRY_DELAY_MS = 1_000L

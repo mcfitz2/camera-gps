@@ -37,6 +37,11 @@ class Prefs(context: Context) {
         get() = prefs.getInt(KEY_SHUTTER_ASSOCIATION, -1)
         set(value) = prefs.edit { putInt(KEY_SHUTTER_ASSOCIATION, value) }
 
+    /** When the phone last read the shutter logger, or 0. */
+    var shutterLastSeen: Long
+        get() = prefs.getLong(KEY_SHUTTER_LAST_SEEN, 0)
+        set(value) = prefs.edit { putLong(KEY_SHUTTER_LAST_SEEN, value) }
+
     /** Name shown on the camera's pairing prompt and device list. */
     val deviceName: String = Build.MODEL
 
@@ -62,6 +67,7 @@ class Prefs(context: Context) {
     fun forgetShutter() = prefs.edit {
         remove(KEY_SHUTTER_ADDRESS)
         remove(KEY_SHUTTER_ASSOCIATION)
+        remove(KEY_SHUTTER_LAST_SEEN)
     }
 
     private companion object {
@@ -71,5 +77,6 @@ class Prefs(context: Context) {
         const val KEY_UUID = "uuid"
         const val KEY_SHUTTER_ADDRESS = "shutter_address"
         const val KEY_SHUTTER_ASSOCIATION = "shutter_association"
+        const val KEY_SHUTTER_LAST_SEEN = "shutter_last_seen"
     }
 }

@@ -17,8 +17,8 @@ Geotagging for cameras that can't do it themselves:
 Written for a single phone (Pixel 8 Pro, Android 14+; `minSdk` 34).
 
 - The camera and the shutter logger are paired through the companion device manager. After that, system-held Bluetooth scans wake the app when either one needs it, so nothing has to stay running.
-- **Canon tab:** pair the camera once. The app then connects whenever the camera is on and sends location updates until it turns off.
-- **Film tab:** roll management, the frame list, and pairing the shutter logger. Frames are numbered per roll, rolls can be renamed and finished, frames can be edited or inserted, and each roll exports to CSV.
+- **Film tab:** the roll in the camera and past rolls, with the shutter logger behind the chip in the app bar. Frames are numbered per roll and named by place (reverse-geocoded), rolls can be edited and finished, frames can be annotated, inserted or deleted, and each roll exports to CSV.
+- **Camera tab:** pair the Canon camera once. The app then connects whenever the camera is on and sends location updates until it turns off.
 
 Build:
 
