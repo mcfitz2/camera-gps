@@ -9,6 +9,7 @@ import java.io.File
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /** A roll's frame log as CSV, for matching up scans. */
 object Export {
@@ -16,21 +17,24 @@ object Export {
         "roll", "frame", "taken_at", "lat", "lon", "accuracy_m", "alt_m", "place", "approximate", "exposure_ms", "note",
     )
 
-    /** Times are local with their offset, e.g. `2026-09-23T14:05:09-05:00`. */
+    /**
+     * Times are local with their offset, e.g. `2026-09-23T14:05:09-05:00`.
+     * Numbers use `.` whatever the locale; text that would start a spreadsheet formula gets a leading `'`.
+     */
     fun csv(roll: Roll, frames: List<Frame>, zone: ZoneId = ZoneId.systemDefault()): String {
         val rows = frames.map { f ->
             listOf(
-                roll.name,
+                text(roll.name),
                 f.number.toString(),
                 f.takenAt?.let { DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(Instant.ofEpochMilli(it).atZone(zone).withNano(0)) },
-                f.lat?.let { "%.6f".format(it) },
-                f.lon?.let { "%.6f".format(it) },
-                f.accuracyM?.let { "%.0f".format(it) },
-                f.altM?.let { "%.1f".format(it) },
-                f.place,
+                f.lat?.let { String.format(Locale.ROOT, "%.6f", it) },
+                f.lon?.let { String.format(Locale.ROOT, "%.6f", it) },
+                f.accuracyM?.let { String.format(Locale.ROOT, "%.0f", it) },
+                f.altM?.let { String.format(Locale.ROOT, "%.1f", it) },
+                text(f.place),
                 if (f.takenAt == null) null else f.approximate.toString(),
                 f.exposureMs?.toString(),
-                f.note,
+                text(f.note),
             )
         }
         return (listOf(HEADER) + rows).joinToString("") { row -> row.joinToString(",") { field(it) } + "\r\n" }
@@ -55,4 +59,11 @@ object Export {
         value.any { it == ',' || it == '"' || it == '\n' || it == '\r' } -> "\"" + value.replace("\"", "\"\"") + "\""
         else -> value
     }
+
+    /** Characters that make a spreadsheet read a cell as a formula. */
+    private val FORMULA_START = setOf('=', '+', '-', '@', '\t', '\r')
+
+    /** Free text, prefixed with `'` if a spreadsheet would run it as a formula. */
+    private fun text(value: String?): String? =
+        value?.let { if (it.firstOrNull() in FORMULA_START) "'$it" else it }
 }
