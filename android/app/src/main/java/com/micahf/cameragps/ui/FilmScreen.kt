@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -40,6 +39,7 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -63,7 +63,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -325,7 +327,8 @@ fun RollSheet(
     val scope = rememberCoroutineScope()
     val stocks by dao.stocks().collectAsStateWithLifecycle(emptyList())
     var managing by remember { mutableStateOf(false) }
-    var stock by remember { mutableStateOf(initial?.stock ?: "") }
+    var field by remember { mutableStateOf(TextFieldValue(initial?.stock ?: "")) }
+    val stock = field.text
     var iso by remember { mutableStateOf(initial?.iso) }
     var capacity by remember { mutableStateOf(initial?.capacity ?: 36) }
     var name by remember { mutableStateOf(initial?.name ?: "") }
@@ -340,9 +343,12 @@ fun RollSheet(
             Text(if (initial == null) "Load film" else "Edit roll", style = MaterialTheme.typography.headlineSmall)
 
             OutlinedTextField(
-                stock,
-                { stock = it },
+                field,
+                { field = it },
                 label = { Text("Film stock") },
+                trailingIcon = {
+                    IconButton(onClick = { managing = true }) { Icon(Icons.Outlined.Edit, "Edit stock list") }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -355,17 +361,10 @@ fun RollSheet(
                     FilterChip(
                         selected = s.name.equals(typed, ignoreCase = true),
                         onClick = {
-                            stock = s.name
+                            field = TextFieldValue(s.name, TextRange(s.name.length))
                             if (s.iso != null) iso = s.iso
                         },
                         label = { Text(s.name) },
-                    )
-                }
-                item {
-                    AssistChip(
-                        onClick = { managing = true },
-                        label = { Text("Edit list") },
-                        leadingIcon = { Icon(Icons.Outlined.Edit, null, Modifier.size(18.dp)) },
                     )
                 }
             }

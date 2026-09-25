@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -58,7 +59,12 @@ fun StocksSheet(dao: FilmDao, onDismiss: () -> Unit) {
         iso = ""
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        // The list is long enough to fill the screen; keep the handle clear of the status bar.
+        modifier = Modifier.statusBarsPadding(),
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
