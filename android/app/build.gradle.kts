@@ -48,6 +48,9 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 room {
@@ -69,4 +72,6 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.exifinterface)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }
