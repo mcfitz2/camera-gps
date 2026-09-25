@@ -188,7 +188,7 @@ fun RollScreen(dao: FilmDao, rollId: Long, onClose: () -> Unit, modifier: Modifi
             onDismiss = { editingRoll = false },
             onSave = {
                 editingRoll = false
-                scope.launch { dao.update(it) }
+                scope.launch { dao.editRoll(it.id, it.name, it.stock, it.iso, it.capacity) }
             },
         )
     }
@@ -212,7 +212,7 @@ fun RollScreen(dao: FilmDao, rollId: Long, onClose: () -> Unit, modifier: Modifi
             frame = frame,
             onDismiss = { note ->
                 selected = null
-                if (note != frame.note) scope.launch { dao.update(frame.copy(note = note)) }
+                if (note != frame.note) scope.launch { dao.setNote(frame.id, note) }
             },
             onInsertBlank = {
                 selected = null
