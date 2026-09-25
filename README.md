@@ -11,8 +11,6 @@ Geotagging for cameras that can't do it themselves:
 |---|---|
 | [`android/`](android) | The Android app (Kotlin, Jetpack Compose, Room). |
 | [`firmware/shutter/`](firmware/shutter) | Hotshoe shutter logger for a Seeed XIAO ESP32-C6 (Rust, `no_std`, esp-hal, trouble-host). |
-| [`firmware/gps-feeder/`](firmware/gps-feeder) | Standalone Canon GPS feeder with its own GPS receiver, an alternative to the phone (Rust, ESP-IDF, ESP32 / XIAO ESP32-S3). |
-| [`prototypes/`](prototypes) | Arduino/PlatformIO experiments: the first Canon BLE proof of concept and a board smoke test. |
 
 ## Android app
 
@@ -72,20 +70,6 @@ cd firmware/shutter
 cargo run --release              # builds, flashes with espflash, opens the monitor
 cd host-tests && cargo test --target "$(rustc -vV | sed -n 's/host: //p')"
 ```
-
-## GPS feeder (`firmware/gps-feeder`)
-
-- Reads a serial GPS receiver and connects to a Canon camera, then pushes location and UTC time over BLE.
-- Needs the Xtensa Rust toolchain (`espup install`) and `ldproxy`.
-- Board is chosen by alias:
-
-```sh
-cd firmware/gps-feeder
-cargo build-proto   # generic ESP32 dev board: BLE + serial console
-cargo build-xiao    # XIAO ESP32-S3 with display, buttons and battery sense
-```
-
-The camera's address is set in `src/camera.rs`.
 
 ## Credits
 

@@ -4,11 +4,8 @@
 
 # Rust
 target/
-.embuild/
-**/*.rs.bk
 
-# PlatformIO
-.pio/
+**/*.rs.bk
 
 # No longer used; kept locally for reference only.
 firmware/shutter/vendor/
