@@ -150,6 +150,10 @@ mod tests {
         log
     }
 
+    fn u32_at(out: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes(out[at..at + 4].try_into().unwrap())
+    }
+
     #[test]
     fn garbage_is_invalid() {
         let mut log = Log::EMPTY;
@@ -245,5 +249,113 @@ mod tests {
         let mut out = [0u8; HEADER_LEN + 2 * RECORD_LEN + 5];
         assert_eq!(log.encode(10, &mut out), HEADER_LEN + 2 * RECORD_LEN);
         assert_eq!(out[4], 2);
+    }
+
+    #[test]
+    fn acking_the_last_shot_empties_the_log() {
+        let mut log = log();
+        for i in 0..3 {
+            log.record(i);
+        }
+        log.ack(2);
+        assert_eq!(log.pending(), 0);
+        assert_eq!(log.shot(2), None);
+        assert_eq!(log.record(10), 3);
+        assert_eq!(log.pending(), 1);
+    }
+
+    #[test]
+    fn acks_after_the_ring_wraps() {
+        let mut log = log();
+        for i in 0..CAPACITY as u64 + 10 {
+            log.record(i);
+        }
+        log.ack(CAPACITY as u32 + 5);
+        assert_eq!(log.pending(), 4);
+        assert_eq!(log.shot(CAPACITY as u32 + 9).unwrap().at_us, CAPACITY as u64 + 9);
+        assert!(log.is_valid());
+    }
+
+    #[test]
+    fn encodes_shots_past_the_wrap() {
+        let mut log = log();
+        for i in 0..CAPACITY as u64 + 3 {
+            log.record(i * 1_000);
+        }
+        let mut out = [0u8; HEADER_LEN + CAPACITY * RECORD_LEN];
+        assert_eq!(log.encode(100_000_000, &mut out), out.len());
+        assert_eq!(out[4] as usize, CAPACITY);
+        // The oldest pending shot is seq 3; the newest, seq 66, sits in slot 2.
+        assert_eq!(u32_at(&out, HEADER_LEN), 3);
+        let last = HEADER_LEN + (CAPACITY - 1) * RECORD_LEN;
+        assert_eq!(u32_at(&out, last), CAPACITY as u32 + 2);
+        assert_eq!(u32_at(&out, last + 4), 99_934);
+    }
+
+    #[test]
+    fn full_log_fills_one_read() {
+        // 16 records per read, as in ble.rs.
+        let mut log = log();
+        for i in 0..CAPACITY as u64 {
+            log.record(i);
+        }
+        let mut out = [0u8; HEADER_LEN + 16 * RECORD_LEN];
+        assert_eq!(log.encode(0, &mut out), out.len());
+        assert_eq!(out[4], 16);
+        assert_eq!(u32_at(&out, HEADER_LEN + 15 * RECORD_LEN), 15);
+    }
+
+    #[test]
+    fn ages_saturate() {
+        let mut log = log();
+        log.record(5_000_000);
+        let mut out = [0u8; HEADER_LEN + RECORD_LEN];
+        log.encode(u64::MAX, &mut out);
+        assert_eq!(u32_at(&out, HEADER_LEN + 4), u32::MAX);
+        // A shot "after" now, e.g. a clock oddity, is age 0 rather than wrapping.
+        log.encode(1_000, &mut out);
+        assert_eq!(u32_at(&out, HEADER_LEN + 4), 0);
+    }
+
+    #[test]
+    fn long_contact_saturates() {
+        let mut log = log();
+        let seq = log.record(0);
+        log.release(u64::MAX);
+        assert_eq!(log.shot(seq).unwrap().contact_ms, u32::MAX);
+    }
+
+    #[test]
+    fn corrupt_log_is_invalid() {
+        let mut log = log();
+        log.record(0);
+        log.record(1);
+        log.ack(0);
+        assert!(log.is_valid());
+        // Open shot already acknowledged.
+        log.open = 1;
+        assert!(!log.is_valid());
+        // Open shot not recorded yet.
+        log.open = 5;
+        assert!(!log.is_valid());
+        log.open = 0;
+        // More pending than fits.
+        log.first = 0;
+        log.next = CAPACITY as u32 + 1;
+        assert!(!log.is_valid());
+    }
+
+    #[test]
+    fn recording_into_a_full_log_moves_the_open_shot() {
+        let mut log = log();
+        for i in 0..CAPACITY as u64 {
+            log.record(i);
+        }
+        let seq = log.record(1_000_000);
+        log.release(3_000_000);
+        assert_eq!(log.shot(seq).unwrap().contact_ms, 2_000);
+        // The shot before it never saw its contact open.
+        assert_eq!(log.shot(seq - 1).unwrap().contact_ms, 0);
+        assert!(log.is_valid());
     }
 }
