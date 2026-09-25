@@ -24,14 +24,14 @@ use core::cell::RefCell;
 
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
-use embassy_futures::select::select3;
+use embassy_futures::select::{select, select3};
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::Persistable;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
-use esp_hal::rng::Rng;
+use esp_hal::rng::{Rng, Trng, TrngSource};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
@@ -46,6 +46,10 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 /// Contact bounce: a closure this soon after the contact opened is the same shot.
 const DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// How long to keep recording without Bluetooth before resetting to retry it.
+/// Shots survive the reset in RTC memory.
+const BLE_RETRY: Duration = Duration::from_secs(300);
 
 // SAFETY: plain integers and arrays of them; every bit pattern is a valid
 // value, and `Log::is_valid` rejects garbage.
@@ -70,7 +74,7 @@ async fn main(_spawner: Spawner) -> ! {
     if log.is_valid() {
         info!("restart; {} pending", log.pending());
     } else {
-        let boot_id = Rng::new().random() ^ now_us() as u32;
+        let boot_id = boot_id(peripherals.RNG, peripherals.ADC1);
         log.reset(boot_id);
         info!("power-up; boot id {boot_id:08x}");
     }
@@ -88,9 +92,11 @@ async fn main(_spawner: Spawner) -> ! {
     let transport = match BleConnector::new(peripherals.BT, Default::default()) {
         Ok(t) => t,
         Err(e) => {
-            // Keep recording shots; the phone gets them after a reset.
+            // Keep recording shots, then reset to retry; the log survives it.
             warn!("bluetooth: {e:?}");
-            watch(&mut shutter, &shared).await
+            select(watch(&mut shutter, &shared), Timer::after(BLE_RETRY)).await;
+            warn!("restarting");
+            esp_hal::system::software_reset()
         }
     };
     let controller = ExternalController::<_, 1>::new(transport);
@@ -111,7 +117,7 @@ async fn main(_spawner: Spawner) -> ! {
         async {
             match &server {
                 Some(server) => ble::serve(&stack, server, &shared, &mut led).await,
-                None => core::future::pending().await,
+                None => Timer::after(BLE_RETRY).await,
             }
         },
         watch(&mut shutter, &shared),
@@ -138,6 +144,20 @@ async fn watch(shutter: &mut Input<'_>, shared: &ble::Shared<'_, '_>) -> ! {
         }
         shared.changed.signal(());
         Timer::after(DEBOUNCE).await;
+    }
+}
+
+/// A random boot id. The plain RNG is only pseudo-random until the radio
+/// runs, and a repeated id makes the phone drop new shots as duplicates, so
+/// this briefly borrows ADC noise as an entropy source.
+fn boot_id(rng: esp_hal::peripherals::RNG<'_>, adc: esp_hal::peripherals::ADC1<'_>) -> u32 {
+    let _source = TrngSource::new(rng, adc);
+    match Trng::try_new() {
+        Ok(trng) => trng.random(),
+        Err(e) => {
+            warn!("trng: {e:?}");
+            Rng::new().random()
+        }
     }
 }
 
