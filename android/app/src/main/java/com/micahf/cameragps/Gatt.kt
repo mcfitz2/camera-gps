@@ -13,6 +13,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,6 +24,13 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 class GattException(message: String) : Exception(message)
+
+/** [withTimeout], but running out of time is a failed operation rather than a cancellation. */
+private suspend fun <T> within(ms: Long, what: String, block: suspend CoroutineScope.() -> T): T = try {
+    withTimeout(ms, block)
+} catch (e: TimeoutCancellationException) {
+    throw GattException("$what: timed out")
+}
 
 /**
  * Coroutine wrapper around [BluetoothGatt]. Android allows one GATT operation
@@ -142,7 +151,7 @@ class Gatt private constructor(private val device: BluetoothDevice) {
         try {
             val started = start()
             if (started != BluetoothStatusCodes.SUCCESS) throw GattException("$what: not started ($started)")
-            val status = withTimeout(OP_TIMEOUT_MS) { done.await() }
+            val status = within(OP_TIMEOUT_MS, what) { done.await() }
             if (status != BluetoothGatt.GATT_SUCCESS) throw GattException("$what: status $status")
         } finally {
             pending = null
@@ -163,11 +172,11 @@ class Gatt private constructor(private val device: BluetoothDevice) {
             g.gatt = device.connectGatt(context, false, g.callback, BluetoothDevice.TRANSPORT_LE)
                 ?: throw GattException("connectGatt failed")
             try {
-                withTimeout(timeoutMs) { g.connected.await() }
+                within(timeoutMs, "connect") { g.connected.await() }
                 if (bond && device.bondState != BluetoothDevice.BOND_BONDED) {
                     bond(context, device)
                 }
-                val status = withTimeout(OP_TIMEOUT_MS * 2) {
+                val status = within(OP_TIMEOUT_MS * 2, "service discovery") {
                     if (!g.gatt.discoverServices()) throw GattException("discoverServices failed")
                     g.servicesDiscovered.await()
                 }
