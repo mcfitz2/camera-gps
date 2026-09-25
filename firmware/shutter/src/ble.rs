@@ -36,6 +36,11 @@ const PENDING_INTERVAL: Duration = Duration::from_millis(100);
 /// Advertising interval otherwise, only for pairing and "Collect now".
 const IDLE_INTERVAL: Duration = Duration::from_millis(1000);
 
+/// Drop a connection that sends nothing for this long, so an idle client
+/// can't keep the logger from advertising. Well above the phone's 15 s wait
+/// for a location fix between reading and acking.
+const LINK_IDLE: Duration = Duration::from_secs(30);
+
 pub const CONNECTIONS_MAX: usize = 1;
 pub const L2CAP_CHANNELS_MAX: usize = 1;
 
@@ -144,7 +149,15 @@ async fn session(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacke
     let events = &server.shutter.events;
     let ack = &server.shutter.ack;
     loop {
-        match conn.next().await {
+        let event = match select(conn.next(), Timer::after(LINK_IDLE)).await {
+            Either::First(event) => event,
+            Either::Second(()) => {
+                warn!("phone idle; disconnecting");
+                conn.raw().disconnect();
+                return;
+            }
+        };
+        match event {
             GattConnectionEvent::Disconnected { reason } => {
                 info!("phone disconnected: {reason:?}");
                 return;
