@@ -24,7 +24,7 @@ Build:
 
 ```sh
 cd android
-./gradlew assembleDebug testDebugUnitTest
+./gradlew assembleDebug testDebugUnitTest lintDebug
 ```
 
 ### Releases
