@@ -35,7 +35,7 @@ class FilmDaoTest {
     fun addShotsStartsAnUntitledRollWhenNoneIsLoaded() = runBlocking {
         val (roll, added) = dao.addShots(listOf(shot(0, 2_000), shot(1, 1_000)), "Untitled", now = 10)
 
-        assertEquals("Untitled", roll.name)
+        assertEquals("Untitled", roll!!.name)
         assertEquals(10L, roll.loadedAt)
         assertEquals(listOf(1, 2), added.map { it.number })
         assertEquals(1_000L, added.single { it.number == 1 }.takenAt)
@@ -63,6 +63,32 @@ class FilmDaoTest {
 
         val (_, addedOtherBoot) = dao.addShots(listOf(shot(0, 100, bootId = 2)), "Untitled", now = 5)
         assertEquals(1, addedOtherBoot.size)
+    }
+
+    @Test
+    fun duplicateBatchDoesNotStartARoll() = runBlocking {
+        val (roll, _) = dao.addShots(listOf(shot(0, 100), shot(1, 200)), "Untitled", now = 5)
+        dao.finish(roll!!.id, 50)
+
+        val result = dao.addShots(listOf(shot(0, 100), shot(1, 200)), "Untitled", now = 60)
+
+        assertEquals(null, result.first)
+        assertEquals(emptyList<Frame>(), result.second)
+        assertEquals(1, dao.rolls().first().size)
+    }
+
+    @Test
+    fun batchWithOneNewShotStartsARoll() = runBlocking {
+        val (roll, _) = dao.addShots(listOf(shot(0, 100), shot(1, 200)), "Untitled", now = 5)
+        dao.finish(roll!!.id, 50)
+
+        val (secondRoll, added) = dao.addShots(listOf(shot(1, 200), shot(2, 300)), "Untitled", now = 60)
+
+        assertTrue(secondRoll!!.id != roll.id)
+        assertEquals(1, added.size)
+        assertEquals(1, added.single().number)
+        assertEquals(2L, added.single().deviceSeq)
+        assertEquals(2, dao.rolls().first().size)
     }
 
     @Test

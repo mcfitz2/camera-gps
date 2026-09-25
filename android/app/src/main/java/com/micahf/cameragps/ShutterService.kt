@@ -133,7 +133,7 @@ class ShutterService : Service() {
         val untitled = "Untitled roll " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(now))
         val dao = FilmDb.get(this).film()
         val (roll, added) = dao.addShots(shots, untitled, now)
-        if (added.isEmpty()) return
+        if (roll == null || added.isEmpty()) return
         // One fix covers the batch, so one lookup names them all.
         val place = fix?.let { Places.name(this, it.latitude, it.longitude) }
         val named = if (place == null) added else added.map { it.copy(place = place) }
