@@ -9,7 +9,6 @@ import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
 import android.location.Location
 import android.location.LocationManager
 import android.location.LocationRequest
@@ -44,6 +43,7 @@ import kotlin.coroutines.resume
 class ShutterService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var job: Job? = null
+    private var started = false
     private lateinit var notifier: Notifier
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -51,12 +51,18 @@ class ShutterService : Service() {
     override fun onCreate() {
         super.onCreate()
         notifier = Notifier(this)
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-        startForeground(Notifier.ID_SHUTTER, notifier.collecting(), types)
+        started = startForegroundFor(
+            Notifier.ID_SHUTTER,
+            notifier.collecting(),
+            withLocation = granted(Manifest.permission.ACCESS_FINE_LOCATION),
+        ) != null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!started) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // Scan matches keep arriving while the logger advertises; one run collects everything.
         if (job?.isActive != true) {
             job = scope.launch {
