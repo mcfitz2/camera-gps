@@ -140,6 +140,14 @@ impl Log {
     }
 }
 
+/// The highest sequence number in bytes produced by [`Log::encode`], or
+/// `None` if they hold no shots.
+pub fn last_seq(encoded: &[u8]) -> Option<u32> {
+    let count = *encoded.get(4)? as usize;
+    let last = HEADER_LEN + count.checked_sub(1)? * RECORD_LEN;
+    Some(u32::from_le_bytes(encoded.get(last..last + 4)?.try_into().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +365,20 @@ mod tests {
         // The shot before it never saw its contact open.
         assert_eq!(log.shot(seq - 1).unwrap().contact_ms, 0);
         assert!(log.is_valid());
+    }
+
+    #[test]
+    fn last_seq_of_encoded_shots() {
+        let mut log = log();
+        let mut out = [0u8; HEADER_LEN + 2 * RECORD_LEN];
+        log.encode(0, &mut out);
+        assert_eq!(last_seq(&out), None);
+        for i in 0..5 {
+            log.record(i);
+        }
+        // Only two fit, so the last one sent is seq 1.
+        log.encode(10, &mut out);
+        assert_eq!(last_seq(&out), Some(1));
+        assert_eq!(last_seq(&[]), None);
     }
 }
