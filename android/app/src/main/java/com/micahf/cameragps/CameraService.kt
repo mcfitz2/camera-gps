@@ -20,6 +20,7 @@ import android.location.LocationRequest
 import android.location.altitude.AltitudeConverter
 import android.os.IBinder
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -67,8 +68,16 @@ class CameraService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (loop?.isActive != true) {
             loop = scope.launch {
-                runSessions()
-                stopSelf()
+                try {
+                    runSessions()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "sessions: ${e.message}")
+                } finally {
+                    // Leaving the foreground matters most when something went wrong.
+                    stopSelf()
+                }
             }
         }
         return START_NOT_STICKY
