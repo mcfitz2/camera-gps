@@ -6,27 +6,28 @@ import android.companion.AssociationRequest
 import android.companion.BluetoothLeDeviceFilter
 import android.companion.CompanionDeviceManager
 import android.bluetooth.le.ScanFilter
+import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.CameraRoll
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.outlined.CameraRoll
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,18 +38,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.micahf.cameragps.db.FilmDb
-import java.text.DateFormat
-import java.util.Date
+import com.micahf.cameragps.ui.CameraGpsTheme
+import com.micahf.cameragps.ui.CameraScreen
+import com.micahf.cameragps.ui.FilmScreen
+import com.micahf.cameragps.ui.SetupScreen
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: Prefs
     /** Bumped to recompose after permission or association changes. */
     private val refresh = mutableIntStateOf(0)
-    private val cameraAddress = mutableStateOf<String?>(null)
-    private val shutterAddress = mutableStateOf<String?>(null)
+    private val cameraName = mutableStateOf<String?>(null)
+    private val shutterPaired = mutableStateOf(false)
 
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onChanged() }
@@ -58,30 +59,34 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
         setContent {
-            MaterialTheme {
-                var tab by rememberSaveable { mutableIntStateOf(0) }
-                Scaffold(
-                    bottomBar = {
-                        NavigationBar {
-                            NavigationBarItem(
-                                selected = tab == 0,
-                                onClick = { tab = 0 },
-                                icon = { Icon(Icons.Filled.LocationOn, null) },
-                                label = { Text("Canon") },
+            CameraGpsTheme {
+                refresh.intValue // read so permission changes recompose
+                val missing = remember(refresh.intValue) { missingPermissions() }
+                val background = remember(refresh.intValue) { hasBackgroundLocation() }
+                if (missing.isNotEmpty() || !background) {
+                    SetupScreen(
+                        bluetooth = missing.none { it.startsWith("android.permission.BLUETOOTH") },
+                        location = Manifest.permission.ACCESS_FINE_LOCATION !in missing && background,
+                        notifications = Manifest.permission.POST_NOTIFICATIONS !in missing,
+                        onContinue = {
+                            if (missing.isNotEmpty()) {
+                                requestPermissions.launch(missing.toTypedArray())
+                            } else {
+                                requestBackgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                            }
+                        },
+                        onOpenSettings = {
+                            startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
                             )
-                            NavigationBarItem(
-                                selected = tab == 1,
-                                onClick = { tab = 1 },
-                                icon = { Icon(Icons.AutoMirrored.Filled.List, null) },
-                                label = { Text("Film") },
-                            )
-                        }
-                    },
-                ) { padding ->
-                    Screen(tab, Modifier.padding(padding))
+                        },
+                    )
+                } else {
+                    Home()
                 }
             }
         }
@@ -93,68 +98,58 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onChanged() {
-        cameraAddress.value = prefs.cameraAddress
-        shutterAddress.value = prefs.shutterAddress
+        cameraName.value = prefs.cameraAddress?.let { cameraDisplayName() ?: "Canon camera" }
+        shutterPaired.value = prefs.shutterAddress != null
         refresh.intValue++
         if (missingPermissions().isEmpty() && hasBackgroundLocation()) Wake.enable(this)
     }
 
-    @Composable
-    private fun Screen(tab: Int, modifier: Modifier) {
-        refresh.intValue // read so permission changes recompose
-        val missing = remember(refresh.intValue) { missingPermissions() }
-        val background = remember(refresh.intValue) { hasBackgroundLocation() }
-        when {
-            missing.isNotEmpty() -> Column(modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Camera GPS", style = MaterialTheme.typography.headlineMedium)
-                Text("Needs Bluetooth, location and notification access.")
-                Button(onClick = { requestPermissions.launch(missing.toTypedArray()) }) {
-                    Text("Grant permissions")
-                }
-            }
-            !background -> Column(modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Camera GPS", style = MaterialTheme.typography.headlineMedium)
-                Text("Needs location \"Allow all the time\" to tag photos while the app is closed.")
-                Button(onClick = {
-                    requestBackgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                }) { Text("Allow background location") }
-            }
-            tab == 0 -> CanonScreen(modifier)
-            else -> FilmScreen(
-                dao = remember { FilmDb.get(this).film() },
-                shutterAddress = shutterAddress.value,
-                onChooseShutter = ::associateShutter,
-                onForgetShutter = ::forgetShutter,
-                onCollect = { ShutterService.start(this) },
-                modifier = modifier,
-            )
-        }
-    }
+    /** The camera's name as the companion device manager saw it, e.g. "EOS R6". */
+    private fun cameraDisplayName(): String? =
+        getSystemService(CompanionDeviceManager::class.java).myAssociations
+            .firstOrNull { it.id == prefs.associationId }
+            ?.displayName?.toString()?.takeIf { it.isNotBlank() }
 
     @Composable
-    private fun CanonScreen(modifier: Modifier) {
-        val status by StatusStore.status.collectAsStateWithLifecycle()
-        val address = cameraAddress.value
-
-        Column(modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Camera GPS", style = MaterialTheme.typography.headlineMedium)
-            when {
-                address == null -> {
-                    Text("Turn the camera on, enable Bluetooth pairing on it, then choose it here.")
-                    Button(onClick = ::associateCamera) { Text("Choose camera") }
+    private fun Home() {
+        var tab by rememberSaveable { mutableIntStateOf(0) }
+        Scaffold(
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        icon = { Icon(if (tab == 0) Icons.Filled.CameraRoll else Icons.Outlined.CameraRoll, null) },
+                        label = { Text("Film") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                        icon = { Icon(if (tab == 1) Icons.Filled.PhotoCamera else Icons.Outlined.PhotoCamera, null) },
+                        label = { Text("Camera") },
+                    )
                 }
-                else -> {
-                    Text("Camera $address")
-                    Text("Status: ${status.link.label}")
-                    status.message?.let { Text(it) }
-                    status.lastSent?.let {
-                        val at = DateFormat.getTimeInstance().format(Date(it.atMillis))
-                        Text("Last sent %.5f, %.5f (±%.0f m) at %s".format(it.latitude, it.longitude, it.accuracyM, at))
-                    }
-                    Text("Sent this session: ${status.sendsThisSession}")
-                    Button(onClick = { CameraService.start(this@MainActivity) }) { Text("Connect now") }
-                    OutlinedButton(onClick = ::forget) { Text("Forget camera") }
-                }
+            },
+            // The screens' own app bars take the status bar inset.
+            contentWindowInsets = WindowInsets(0),
+        ) { padding ->
+            val modifier = Modifier.padding(padding)
+            when (tab) {
+                0 -> FilmScreen(
+                    dao = remember { FilmDb.get(this).film() },
+                    loggerPaired = shutterPaired.value,
+                    onPairLogger = ::associateShutter,
+                    onForgetLogger = ::forgetShutter,
+                    onCollect = { ShutterService.start(this) },
+                    modifier = modifier,
+                )
+                else -> CameraScreen(
+                    cameraName = cameraName.value,
+                    onPair = ::associateCamera,
+                    onConnect = { CameraService.start(this) },
+                    onForget = ::forget,
+                    modifier = modifier,
+                )
             }
         }
     }
@@ -222,7 +217,7 @@ class MainActivity : ComponentActivity() {
         Wake.disableCamera(this)
         disassociate(prefs.associationId)
         prefs.forgetCamera()
-        stopService(android.content.Intent(this, CameraService::class.java))
+        stopService(Intent(this, CameraService::class.java))
         onChanged()
     }
 

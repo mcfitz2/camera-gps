@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 /** A roll's frame log as CSV, for matching up scans. */
 object Export {
     private val HEADER = listOf(
-        "roll", "frame", "taken_at", "lat", "lon", "accuracy_m", "alt_m", "approximate", "exposure_ms", "note",
+        "roll", "frame", "taken_at", "lat", "lon", "accuracy_m", "alt_m", "place", "approximate", "exposure_ms", "note",
     )
 
     /** Times are local with their offset, e.g. `2026-09-23T14:05:09-05:00`. */
@@ -27,6 +27,7 @@ object Export {
                 f.lon?.let { "%.6f".format(it) },
                 f.accuracyM?.let { "%.0f".format(it) },
                 f.altM?.let { "%.1f".format(it) },
+                f.place,
                 if (f.takenAt == null) null else f.approximate.toString(),
                 f.exposureMs?.toString(),
                 f.note,

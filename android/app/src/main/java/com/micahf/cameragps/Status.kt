@@ -4,12 +4,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
-enum class Link(val label: String) {
-    Idle("waiting for camera"),
-    Connecting("connecting"),
-    AwaitingApproval("confirm pairing on camera"),
-    Connected("connected"),
-    Sending("sending location"),
+/**
+ * [label] is for the ongoing notification; [title] and [detail] are the
+ * friendlier wording on the Camera tab.
+ */
+enum class Link(val label: String, val title: String, val detail: String) {
+    Idle("waiting for camera", "Waiting for camera", "Photos are tagged automatically whenever the camera is on."),
+    Connecting("connecting", "Connecting…", "Found the camera."),
+    AwaitingApproval("confirm pairing on camera", "Confirm on camera", "Accept the pairing request on the camera's screen."),
+    Connected("connected", "Connected", "Getting a location fix."),
+    Sending("sending location", "Tagging photos", "Your location is sent to the camera as you move."),
 }
 
 data class Status(

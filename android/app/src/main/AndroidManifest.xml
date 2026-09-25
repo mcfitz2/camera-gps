@@ -23,9 +23,9 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/ic_menu_mylocation"
+        android:icon="@mipmap/ic_launcher"
         android:label="Camera GPS"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.CameraGps">
 
         <activity
             android:name=".MainActivity"

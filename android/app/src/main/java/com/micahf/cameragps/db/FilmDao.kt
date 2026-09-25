@@ -22,6 +22,16 @@ abstract class FilmDao {
     @Query("SELECT * FROM frame WHERE rollId = :rollId ORDER BY number")
     abstract fun frames(rollId: Long): Flow<List<Frame>>
 
+    /** Film stocks used before, most recent first, for suggestions. */
+    @Query(
+        """SELECT stock FROM roll WHERE stock IS NOT NULL AND stock != ''
+           GROUP BY stock ORDER BY MAX(loadedAt) DESC LIMIT 6""",
+    )
+    abstract fun recentStocks(): Flow<List<String>>
+
+    @Query("UPDATE frame SET place = :place WHERE id IN (:ids)")
+    abstract suspend fun setPlace(ids: List<Long>, place: String)
+
     @Query("SELECT * FROM frame WHERE rollId = :rollId ORDER BY number")
     abstract suspend fun framesNow(rollId: Long): List<Frame>
 
@@ -62,6 +72,10 @@ abstract class FilmDao {
 
     @Query("UPDATE frame SET number = number + :by WHERE rollId = :rollId AND number >= :from")
     protected abstract suspend fun shift(rollId: Long, from: Int, by: Int)
+
+    /** Takes the roll out of the camera; new shots start an untitled roll. */
+    @Query("UPDATE roll SET finishedAt = :at WHERE id = :id")
+    abstract suspend fun finish(id: Long, at: Long)
 
     @Query("UPDATE roll SET finishedAt = :at WHERE finishedAt IS NULL")
     protected abstract suspend fun finishAll(at: Long)

@@ -44,6 +44,8 @@ data class Frame(
     val lon: Double? = null,
     val accuracyM: Float? = null,
     val altM: Double? = null,
+    /** Neighbourhood or town from reverse geocoding, e.g. "Wicker Park". */
+    val place: String? = null,
     /** The location was taken well after the shot, so may be off. */
     val approximate: Boolean = false,
     /** Exposure length for long (bulb) exposures. */
