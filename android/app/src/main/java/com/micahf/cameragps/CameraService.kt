@@ -42,6 +42,7 @@ import kotlin.coroutines.resume
 class CameraService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var loop: Job? = null
+    private var started = false
     private val location = MutableStateFlow<Location?>(null)
     private lateinit var locations: LocationManager
     private lateinit var notifier: Notifier
@@ -57,11 +58,15 @@ class CameraService : Service() {
         locations = getSystemService(LocationManager::class.java)
         notifier = Notifier(this)
         val notifications = getSystemService(NotificationManager::class.java)
-        val hasLocation = granted(Manifest.permission.ACCESS_FINE_LOCATION)
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        if (hasLocation) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-        startForeground(Notifier.ID_ONGOING, notifier.ongoing(StatusStore.status.value), types)
-        if (hasLocation) startLocationUpdates()
+        val types = startForegroundFor(
+            Notifier.ID_ONGOING,
+            notifier.ongoing(StatusStore.status.value),
+            withLocation = granted(Manifest.permission.ACCESS_FINE_LOCATION),
+        )
+        started = types != null
+        if (!started) return
+        if (types!! and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0) startLocationUpdates()
+        else Log.w(TAG, "no location type; photos won't be tagged")
         scope.launch {
             StatusStore.status.collect { s ->
                 notifications.notify(Notifier.ID_ONGOING, notifier.ongoing(s))
@@ -70,6 +75,10 @@ class CameraService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!started) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (loop?.isActive != true) {
             loop = scope.launch {
                 try {
