@@ -1,0 +1,10 @@
+# Runs the firmware's hardware-independent modules on the host:
+#   cargo test --target "$(rustc -vV | sed -n 's/host: //p')"
+[package]
+name = "shutter-host-tests"
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,59 @@
+name: Firmware
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+
+jobs:
+  shutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/shutter
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml picks the toolchain and the riscv32imac target.
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: rustup component add clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            firmware/shutter
+            firmware/shutter/host-tests
+      - name: Build
+        run: cargo build --release
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+      - name: Host tests
+        working-directory: firmware/shutter/host-tests
+        run: cargo test --target x86_64-unknown-linux-gnu
+
+  gps-feeder:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware/gps-feeder
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [proto, xiao]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: esp-rs/xtensa-toolchain@v1.6
+        with:
+          default: true
+          buildtargets: esp32,esp32s3
+          ldproxy: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.espressif
+          key: esp-idf-${{ hashFiles('firmware/gps-feeder/.cargo/config.toml') }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware/gps-feeder
+          key: ${{ matrix.board }}
+      - name: Build
+        run: cargo build-${{ matrix.board }}

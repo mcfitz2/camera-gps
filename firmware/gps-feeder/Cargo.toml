@@ -1,0 +1,39 @@
+[package]
+name = "camera-gps"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Standalone GPS feeder for Canon EOS cameras over BLE"
+
+[[bin]]
+name = "camera-gps"
+harness = false
+
+[features]
+default = []
+# Exactly one board must be selected.
+board-proto = []
+board-xiao = ["display", "buttons", "battery"]
+# Optional hardware, enabled per board.
+display = ["dep:embedded-graphics"]
+buttons = []
+battery = []
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+esp-idf-svc = { version = "0.53", features = ["std", "binstart"] }
+esp32-nimble = "0.13"
+embassy-futures = "0.1"
+embedded-graphics = { version = "0.8", optional = true }
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+debug = true
+
+[profile.dev]
+debug = true
+opt-level = "z"

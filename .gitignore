@@ -1,0 +1,14 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Rust
+target/
+.embuild/
+**/*.rs.bk
+
+# PlatformIO
+.pio/
+
+# No longer used; kept locally for reference only.
+firmware/shutter/vendor/

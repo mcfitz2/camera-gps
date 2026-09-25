@@ -1,0 +1,217 @@
+package com.micahf.cameragps
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.ForegroundServiceStartNotAllowedException
+import android.app.Service
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.location.Location
+import android.location.LocationManager
+import android.location.LocationRequest
+import android.location.altitude.AltitudeConverter
+import android.os.CancellationSignal
+import android.os.IBinder
+import android.util.Log
+import com.micahf.cameragps.db.FilmDb
+import com.micahf.cameragps.db.Frame
+import com.micahf.cameragps.db.Roll
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.text.DateFormat
+import java.util.Date
+import kotlin.coroutines.resume
+import kotlin.math.abs
+
+/**
+ * Collects shots from the hotshoe shutter logger: connects while getting a
+ * fresh location, stores the shots as the next frames of the loaded roll,
+ * acknowledges them, and stops. [Wake] starts it when the logger advertises.
+ */
+class ShutterService : Service() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var job: Job? = null
+    private lateinit var notifier: Notifier
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        notifier = Notifier(this)
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        if (granted(Manifest.permission.ACCESS_FINE_LOCATION)) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        startForeground(Notifier.ID_SHUTTER, notifier.collecting(), types)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Scan matches keep arriving while the logger advertises; one run collects everything.
+        if (job?.isActive != true) {
+            job = scope.launch {
+                runCatching { collect() }.onFailure { Log.w(TAG, "collect: ${it.message}") }
+                stopSelf()
+            }
+        }
+        return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private suspend fun collect() {
+        val address = Prefs(this).shutterAddress ?: return
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter ?: return
+        if (!granted(Manifest.permission.BLUETOOTH_CONNECT)) {
+            Log.w(TAG, "missing Bluetooth permission")
+            return
+        }
+        // The logger uses a static random address, which getRemoteDevice would take as public.
+        val device = adapter.getRemoteLeDevice(address, BluetoothDevice.ADDRESS_TYPE_RANDOM)
+        val fix = scope.async { currentLocation() }
+        for (attempt in 1..CONNECT_ATTEMPTS) {
+            try {
+                session(device, fix)
+                return
+            } catch (e: GattException) {
+                Log.w(TAG, "attempt $attempt: ${e.message}")
+                delay(RETRY_DELAY_MS)
+            } catch (e: TimeoutCancellationException) {
+                // A GATT op timed out; the logger may be out of range.
+                Log.w(TAG, "attempt $attempt: ${e.message}")
+                delay(RETRY_DELAY_MS)
+            }
+        }
+    }
+
+    private suspend fun session(device: BluetoothDevice, fix: Deferred<Location?>) {
+        val gatt = Gatt.connect(this, device, CONNECT_TIMEOUT_MS, bond = false)
+        try {
+            runCatching { gatt.requestMtu(ShutterProtocol.MTU) }
+                .onFailure { Log.w(TAG, "MTU: ${it.message}") }
+            // Each read carries up to 16 shots; the logger drops them once acknowledged.
+            while (true) {
+                val value = gatt.read(ShutterProtocol.SERVICE, ShutterProtocol.EVENTS)
+                val receivedAt = System.currentTimeMillis()
+                val events = ShutterProtocol.parseEvents(value)
+                Log.i(TAG, "boot ${events.bootId.toString(16)}: ${events.shots}")
+                if (events.shots.isEmpty()) return
+                store(events, receivedAt, fix.await())
+                gatt.write(ShutterProtocol.SERVICE, ShutterProtocol.ACK, ShutterProtocol.encodeAck(events.shots.maxOf { it.seq }))
+            }
+        } finally {
+            gatt.close()
+        }
+    }
+
+    private suspend fun store(events: ShutterProtocol.Events, receivedAt: Long, fix: Location?) {
+        val shots = events.shots.map { shot ->
+            val takenAt = receivedAt - shot.ageMs
+            Frame(
+                rollId = 0,
+                number = 0,
+                takenAt = takenAt,
+                lat = fix?.latitude,
+                lon = fix?.longitude,
+                accuracyM = fix?.takeIf { it.hasAccuracy() }?.accuracy,
+                altM = fix?.let { if (it.hasMslAltitude()) it.mslAltitudeMeters else null },
+                // Nothing tracks the phone between shots, so a late fix may be somewhere else.
+                approximate = fix == null || abs(fix.time - takenAt) > APPROXIMATE_AFTER_MS,
+                // The contact closes for the whole exposure, but only long ones are measured well.
+                exposureMs = shot.contactMs.takeIf { it >= MIN_EXPOSURE_MS },
+                deviceBootId = events.bootId,
+                deviceSeq = shot.seq,
+            )
+        }
+        val now = System.currentTimeMillis()
+        val untitled = "Untitled roll " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(now))
+        val (roll, added) = FilmDb.get(this).film().addShots(shots, untitled, now)
+        if (added.isNotEmpty()) report(roll, added, newRoll = roll.loadedAt == now)
+    }
+
+    private fun report(roll: Roll, added: List<Frame>, newRoll: Boolean) {
+        val first = added.first().number
+        val last = added.last().number
+        val frames = if (first == last) "Frame $last" else "Frames $first–$last"
+        val place = added.last().let {
+            when {
+                it.lat == null -> "no location"
+                it.approximate -> "approximate location"
+                it.accuracyM != null -> "±%.0f m".format(it.accuracyM)
+                else -> null
+            }
+        }
+        val text = listOfNotNull(place, if (newRoll) "new roll started, rename it in the app" else null)
+        notifier.frames("$frames · ${roll.name}", text.joinToString(" · ").ifEmpty { null })
+        Log.i(TAG, "$frames on ${roll.name}")
+        if (last >= roll.capacity) {
+            notifier.problem("Roll full", "${roll.name} is at frame $last of ${roll.capacity}. Load a new roll in the app.")
+        }
+    }
+
+    /** A fresh fix with sea-level altitude, or the last known one if none comes in time. */
+    @SuppressLint("MissingPermission")
+    private suspend fun currentLocation(): Location? {
+        if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) return null
+        val locations = getSystemService(LocationManager::class.java)
+        val request = LocationRequest.Builder(0)
+            .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+            .setDurationMillis(LOCATION_TIMEOUT_MS)
+            .build()
+        val fix = withTimeoutOrNull(LOCATION_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Location?> { cont ->
+                val cancel = CancellationSignal()
+                cont.invokeOnCancellation { cancel.cancel() }
+                locations.getCurrentLocation(LocationManager.FUSED_PROVIDER, request, cancel, mainExecutor) {
+                    if (cont.isActive) cont.resume(it)
+                }
+            }
+        } ?: locations.getLastKnownLocation(LocationManager.FUSED_PROVIDER) ?: return null
+        if (!fix.hasMslAltitude() && fix.hasAltitude()) {
+            withContext(Dispatchers.IO) {
+                runCatching { AltitudeConverter().addMslAltitudeToLocation(this@ShutterService, fix) }
+                    .onFailure { Log.w(TAG, "altitude conversion: ${it.message}") }
+            }
+        }
+        return fix
+    }
+
+    private fun granted(permission: String) =
+        checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+    companion object {
+        private const val TAG = "ShutterService"
+        /** The logger advertises for 15 s after a shot. */
+        private const val CONNECT_TIMEOUT_MS = 5_000L
+        private const val CONNECT_ATTEMPTS = 3
+        private const val RETRY_DELAY_MS = 1_000L
+        private const val LOCATION_TIMEOUT_MS = 15_000L
+        /** A fix further than this from the shot is marked approximate. */
+        private const val APPROXIMATE_AFTER_MS = 2 * 60_000L
+        /** Shorter contact times are shutter timing noise, not exposure lengths worth noting. */
+        private const val MIN_EXPOSURE_MS = 1_000L
+
+        fun start(context: Context) {
+            try {
+                context.startForegroundService(Intent(context, ShutterService::class.java))
+            } catch (e: ForegroundServiceStartNotAllowedException) {
+                Log.w(TAG, "not allowed to start from the background: ${e.message}")
+            }
+        }
+    }
+}
