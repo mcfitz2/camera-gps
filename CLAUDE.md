@@ -26,5 +26,6 @@
 ## Gotchas
 
 - Room schemas are exported to `android/app/schemas/`. A schema change needs a version bump plus an AutoMigration or a manual migration, and the new schema JSON must be committed.
+- Database tests (`FilmDaoTest`, `MigrationTest`) run on the JVM under Robolectric, pinned to SDK 34 in `app/src/test/resources/robolectric.properties`. `MigrationTest` builds old databases from the exported schema JSON.
 - `ShutterProtocolTest` (`android/app/src/test/.../ShutterProtocolTest.kt`) and the `encodes_ages` test in `firmware/shutter/src/shots.rs` share a byte vector. Change both together.
 - The firmware `Log` lives in RTC memory, so its layout must stay stable across reflashes. `MAGIC` in `shots.rs` guards it, so change `MAGIC` if the layout changes.
