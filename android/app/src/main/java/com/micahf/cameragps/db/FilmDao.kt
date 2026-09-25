@@ -97,16 +97,18 @@ abstract class FilmDao {
 
     /**
      * Stores shots from the device as the next frames of the roll in the
-     * camera, skipping ones already stored. Starts a roll if none is loaded.
+     * camera, skipping ones already stored. Starts a roll if none is loaded
+     * and at least one shot is new.
      *
-     * @return the roll and the frames added.
+     * @return the roll (null if nothing was new and no roll is loaded) and the frames added.
      */
     @Transaction
-    open suspend fun addShots(shots: List<Frame>, untitledName: String, now: Long): Pair<Roll, List<Frame>> {
+    open suspend fun addShots(shots: List<Frame>, untitledName: String, now: Long): Pair<Roll?, List<Frame>> {
+        val fresh = shots.filter { hasShot(it.deviceBootId!!, it.deviceSeq!!).not() }
+        if (fresh.isEmpty()) return activeRoll() to emptyList()
         val roll = activeRoll() ?: Roll(name = untitledName, loadedAt = now).let { it.copy(id = insert(it)) }
         var number = lastNumber(roll.id)
-        val added = shots
-            .filter { hasShot(it.deviceBootId!!, it.deviceSeq!!).not() }
+        val added = fresh
             .sortedBy { it.takenAt }
             .map { shot ->
                 val frame = shot.copy(rollId = roll.id, number = ++number)
