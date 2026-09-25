@@ -55,6 +55,14 @@ data class Frame(
     val note: String? = null,
 )
 
+/** A film stock offered when loading a roll, with its box speed. */
+@Entity(tableName = "stock", indices = [Index("name", unique = true)])
+data class Stock(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(collate = ColumnInfo.NOCASE) val name: String,
+    val iso: Int? = null,
+)
+
 /** A roll with its frame count, for lists. */
 data class RollSummary(
     val id: Long,
