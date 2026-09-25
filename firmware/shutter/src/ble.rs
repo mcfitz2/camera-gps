@@ -16,7 +16,7 @@ use log::{info, warn};
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 
-use crate::shots::{HEADER_LEN, Log, RECORD_LEN};
+use crate::shots::{HEADER_LEN, Log, RECORD_LEN, last_seq};
 
 /// Service UUID, also advertised so the phone's background scan can match it.
 const SERVICE_UUID: [u8; 16] = 0x8a1d0001_4f3c_4b8e_9a61_2c7e5b3d9f40u128.to_le_bytes();
@@ -148,6 +148,7 @@ pub async fn serve<C: Controller>(
 async fn session(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>, shared: &Shared<'_, '_>) {
     let events = &server.shutter.events;
     let ack = &server.shutter.ack;
+    let mut delivered: Option<u32> = None;
     loop {
         let event = match select(conn.next(), Timer::after(LINK_IDLE)).await {
             Either::First(event) => event,
@@ -174,6 +175,7 @@ async fn session(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacke
                     if let Err(e) = server.set(events, &value) {
                         warn!("set events: {e:?}");
                     }
+                    delivered = last_seq(&value).max(delivered);
                 }
                 let acked = matches!(&event, GattEvent::Write(write) if write.handle() == ack.handle);
                 match event.accept() {
@@ -183,6 +185,11 @@ async fn session(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacke
                 if acked {
                     match server.get(ack) {
                         Ok(seq) => {
+                            // Only shots this client has read; a blind write can't drop the rest.
+                            if delivered.is_none_or(|d| seq > d) {
+                                warn!("ack #{seq} beyond what was sent; ignored");
+                                continue;
+                            }
                             let mut log = shared.log.borrow_mut();
                             log.ack(seq);
                             info!("phone stored up to #{seq}; {} pending", log.pending());
