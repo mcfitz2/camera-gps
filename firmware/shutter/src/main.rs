@@ -31,7 +31,7 @@ use esp_backtrace as _;
 use esp_hal::Persistable;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
-use esp_hal::rng::Rng;
+use esp_hal::rng::{Rng, Trng, TrngSource};
 use esp_hal::rtc_cntl::Rtc;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
@@ -70,7 +70,7 @@ async fn main(_spawner: Spawner) -> ! {
     if log.is_valid() {
         info!("restart; {} pending", log.pending());
     } else {
-        let boot_id = Rng::new().random() ^ now_us() as u32;
+        let boot_id = boot_id(peripherals.RNG, peripherals.ADC1);
         log.reset(boot_id);
         info!("power-up; boot id {boot_id:08x}");
     }
@@ -138,6 +138,20 @@ async fn watch(shutter: &mut Input<'_>, shared: &ble::Shared<'_, '_>) -> ! {
         }
         shared.changed.signal(());
         Timer::after(DEBOUNCE).await;
+    }
+}
+
+/// A random boot id. The plain RNG is only pseudo-random until the radio
+/// runs, and a repeated id makes the phone drop new shots as duplicates, so
+/// this briefly borrows ADC noise as an entropy source.
+fn boot_id(rng: esp_hal::peripherals::RNG<'_>, adc: esp_hal::peripherals::ADC1<'_>) -> u32 {
+    let _source = TrngSource::new(rng, adc);
+    match Trng::try_new() {
+        Ok(trng) => trng.random(),
+        Err(e) => {
+            warn!("trng: {e:?}");
+            Rng::new().random()
+        }
     }
 }
 
