@@ -36,7 +36,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.text.DateFormat
 import java.util.Date
 import kotlin.coroutines.resume
-import kotlin.math.abs
 
 /**
  * Collects shots from the hotshoe shutter logger: connects while getting a
@@ -121,24 +120,15 @@ class ShutterService : Service() {
     }
 
     private suspend fun store(events: ShutterProtocol.Events, receivedAt: Long, fix: Location?) {
-        val shots = events.shots.map { shot ->
-            val takenAt = receivedAt - shot.ageMs
-            Frame(
-                rollId = 0,
-                number = 0,
-                takenAt = takenAt,
-                lat = fix?.latitude,
-                lon = fix?.longitude,
-                accuracyM = fix?.takeIf { it.hasAccuracy() }?.accuracy,
-                altM = fix?.let { if (it.hasMslAltitude()) it.mslAltitudeMeters else null },
-                // Nothing tracks the phone between shots, so a late fix may be somewhere else.
-                approximate = fix == null || abs(fix.time - takenAt) > APPROXIMATE_AFTER_MS,
-                // The contact closes for the whole exposure, but only long ones are measured well.
-                exposureMs = shot.contactMs.takeIf { it >= MIN_EXPOSURE_MS },
-                deviceBootId = events.bootId,
-                deviceSeq = shot.seq,
+        val shots = ShotFrames.frames(events, receivedAt, fix?.let {
+            ShotFrames.Fix(
+                time = it.time,
+                lat = it.latitude,
+                lon = it.longitude,
+                accuracyM = it.takeIf { f -> f.hasAccuracy() }?.accuracy,
+                altM = if (it.hasMslAltitude()) it.mslAltitudeMeters else null,
             )
-        }
+        })
         val now = System.currentTimeMillis()
         val untitled = "Untitled roll " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(now))
         val dao = FilmDb.get(this).film()
@@ -206,10 +196,6 @@ class ShutterService : Service() {
         private const val CONNECT_ATTEMPTS = 3
         private const val RETRY_DELAY_MS = 1_000L
         private const val LOCATION_TIMEOUT_MS = 15_000L
-        /** A fix further than this from the shot is marked approximate. */
-        private const val APPROXIMATE_AFTER_MS = 2 * 60_000L
-        /** Shorter contact times are shutter timing noise, not exposure lengths worth noting. */
-        private const val MIN_EXPOSURE_MS = 1_000L
 
         fun start(context: Context) {
             try {
