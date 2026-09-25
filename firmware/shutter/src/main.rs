@@ -24,7 +24,7 @@ use core::cell::RefCell;
 
 use bt_hci::controller::ExternalController;
 use embassy_executor::Spawner;
-use embassy_futures::select::select3;
+use embassy_futures::select::{select, select3};
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
@@ -46,6 +46,10 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 /// Contact bounce: a closure this soon after the contact opened is the same shot.
 const DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// How long to keep recording without Bluetooth before resetting to retry it.
+/// Shots survive the reset in RTC memory.
+const BLE_RETRY: Duration = Duration::from_secs(300);
 
 // SAFETY: plain integers and arrays of them; every bit pattern is a valid
 // value, and `Log::is_valid` rejects garbage.
@@ -88,9 +92,11 @@ async fn main(_spawner: Spawner) -> ! {
     let transport = match BleConnector::new(peripherals.BT, Default::default()) {
         Ok(t) => t,
         Err(e) => {
-            // Keep recording shots; the phone gets them after a reset.
+            // Keep recording shots, then reset to retry; the log survives it.
             warn!("bluetooth: {e:?}");
-            watch(&mut shutter, &shared).await
+            select(watch(&mut shutter, &shared), Timer::after(BLE_RETRY)).await;
+            warn!("restarting");
+            esp_hal::system::software_reset()
         }
     };
     let controller = ExternalController::<_, 1>::new(transport);
@@ -111,7 +117,7 @@ async fn main(_spawner: Spawner) -> ! {
         async {
             match &server {
                 Some(server) => ble::serve(&stack, server, &shared, &mut led).await,
-                None => core::future::pending().await,
+                None => Timer::after(BLE_RETRY).await,
             }
         },
         watch(&mut shutter, &shared),
