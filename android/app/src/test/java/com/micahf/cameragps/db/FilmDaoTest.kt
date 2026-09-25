@@ -129,6 +129,47 @@ class FilmDaoTest {
     }
 
     @Test
+    fun noteEditKeepsPlace() = runBlocking {
+        val rollId = dao.loadRoll(Roll(name = "A", loadedAt = 1))
+        val (_, added) = dao.addShots(listOf(shot(0, 100)), "Untitled", now = 1)
+        val id = added.single().id
+
+        dao.setPlace(listOf(id), "Loop")
+        dao.setNote(id, "hi")
+
+        val frame = dao.framesNow(rollId).single()
+        assertEquals("Loop", frame.place)
+        assertEquals("hi", frame.note)
+    }
+
+    @Test
+    fun deleteUsesCurrentNumber() = runBlocking {
+        val rollId = dao.loadRoll(Roll(name = "A", loadedAt = 1))
+        dao.addShots(listOf(shot(0, 100), shot(1, 200), shot(2, 300)), "Untitled", now = 1)
+        val stale = dao.framesNow(rollId)[1]
+
+        dao.insertBlank(rollId, 1)
+        dao.delete(stale)
+
+        assertEquals(listOf(1, 2, 3), dao.framesNow(rollId).map { it.number })
+    }
+
+    @Test
+    fun editRollKeepsFinishedAt() = runBlocking {
+        val id = dao.loadRoll(Roll(name = "A", loadedAt = 1))
+        dao.finish(id, 5L)
+
+        dao.editRoll(id, "New", "HP5", 400, 24)
+
+        val roll = dao.rollNow(id)!!
+        assertEquals("New", roll.name)
+        assertEquals("HP5", roll.stock)
+        assertEquals(400, roll.iso)
+        assertEquals(24, roll.capacity)
+        assertEquals(5L, roll.finishedAt)
+    }
+
+    @Test
     fun addStockIgnoresNameInAnyCase() = runBlocking {
         val id = dao.addStock(Stock(name = "Zz Film", iso = 100))
         assertTrue(id > 0)

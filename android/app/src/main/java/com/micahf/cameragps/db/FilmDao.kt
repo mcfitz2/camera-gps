@@ -47,6 +47,16 @@ abstract class FilmDao {
     @Query("UPDATE frame SET place = :place WHERE id IN (:ids)")
     abstract suspend fun setPlace(ids: List<Long>, place: String)
 
+    @Query("UPDATE frame SET note = :note WHERE id = :id")
+    abstract suspend fun setNote(id: Long, note: String?)
+
+    /** Changes what the user edits on a roll, leaving when it was loaded and finished alone. */
+    @Query("UPDATE roll SET name = :name, stock = :stock, iso = :iso, capacity = :capacity WHERE id = :id")
+    abstract suspend fun editRoll(id: Long, name: String, stock: String?, iso: Int?, capacity: Int)
+
+    @Query("SELECT * FROM frame WHERE id = :id")
+    protected abstract suspend fun frameNow(id: Long): Frame?
+
     @Query("SELECT * FROM frame WHERE rollId = :rollId ORDER BY number")
     abstract suspend fun framesNow(rollId: Long): List<Frame>
 
@@ -131,10 +141,11 @@ abstract class FilmDao {
         insert(Frame(rollId = rollId, number = number, takenAt = null))
     }
 
-    /** Deletes a frame, moving later frames down one. */
+    /** Deletes a frame, moving later frames down one. Uses its number now, not when [frame] was read. */
     @Transaction
     open suspend fun delete(frame: Frame) {
-        deleteRow(frame)
-        shift(frame.rollId, frame.number + 1, -1)
+        val current = frameNow(frame.id) ?: return
+        deleteRow(current)
+        shift(current.rollId, current.number + 1, -1)
     }
 }
